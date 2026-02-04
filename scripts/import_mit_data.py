@@ -1,30 +1,72 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["requests", "azure-cosmos"]
+# dependencies = ["requests", "azure-cosmos", "azure-identity"]
 # ///
 
 import csv
 import io
 import requests
+from urllib.parse import quote
+from azure.identity import DefaultAzureCredential
 from azure.cosmos import CosmosClient, PartitionKey
 
 # Google Sheet config
-SPREADSHEET_ID = "your-spreadsheet-id-here"  # the long string in the sheet URL
-SHEET_NAME = "Sheet1"  # or whatever the tab is called
-SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet={SHEET_NAME}"
+SPREADSHEET_ID = "15LeHcpeuZC9txkvcaMoh3sUhkMvdMMry69xxXL46DT0"  # direct link to the MIT spreadsheet
+SHEET_NAME = "AI Risk Database v4"
+SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet={quote(SHEET_NAME)}"
 
 # Cosmos DB config
-COSMOS_ENDPOINT = "https://your-account.documents.azure.com:443/"
-COSMOS_KEY = "your-cosmos-key"
+COSMOS_ENDPOINT = "https://airisks.documents.azure.com:443/"
 DATABASE_NAME = "airisks"
 CONTAINER_NAME = "risks"
 
-def fetch_sheet_data(url):
+def fetch_sheet_data(url, skip_rows=1):
+    """
+    Fetch and parse CSV data where headers might not be in the first row.
+    
+    Args:
+        url: The URL to fetch CSV data from
+        header_row_index: The 0-based index of the row containing headers (default: 2 for row 3)
+    """
     response = requests.get(url)
     response.raise_for_status()
-    reader = csv.DictReader(io.StringIO(response.text))
-    return list(reader)
+
+    headings = [
+        "title",
+        "quickRef",
+        "evId",
+        "paperId",
+        "catId",
+        "subCatId",
+        "addEvId",
+        "categoryLevel",
+        "riskCategory",
+        "riskSubcategory",
+        "description",
+        "additionalEvidence",
+        "pDef",
+        "pAddEv",
+        "entity",
+        "intent",
+        "timing",
+        "domain",
+        "subDomain",
+    ]
+
+    # Use csv.reader to properly handle quoted strings with embedded newlines
+    reader = csv.reader(io.StringIO(response.text),strict=True)
+    all_rows = list(reader)
+    
+    # Convert data rows (after header row) to dictionaries
+    data_rows = []
+    for i,row in enumerate(all_rows[skip_rows:]):
+        if row:  # Skip empty rows
+            row_dict = dict(zip(headings, row))
+            assert len(row) == len(headings), f"Row {i} has {len(row)} columns but expected {len(headings)}... {row_dict}"
+            data_rows.append(row_dict | {"id": f"mit.{row_dict['evId']}", "source": "MIT_Risk_Repository"})
+    
+    return data_rows
 
 def main():
     # Fetch the sheet
@@ -32,8 +74,12 @@ def main():
     rows = fetch_sheet_data(SHEET_URL)
     print(f"Got {len(rows)} rows")
 
+    rows = rows[:4]
+
     # Connect to Cosmos
-    client = CosmosClient(COSMOS_ENDPOINT, COSMOS_KEY)
+
+    credential = DefaultAzureCredential()
+    client = CosmosClient(COSMOS_ENDPOINT, credential=credential)
     database = client.create_database_if_not_exists(DATABASE_NAME)
     container = database.create_container_if_not_exists(
         id=CONTAINER_NAME,
@@ -43,12 +89,7 @@ def main():
 
     # Load each row as a document
     for i, row in enumerate(rows):
-        doc = {
-            "id": f"mit-risk-{i:04d}",
-            "source": "MIT",
-            **row  # spread all the CSV columns as document fields
-        }
-        container.upsert_item(doc)
+        container.upsert_item(row)
         
         if (i + 1) % 100 == 0:
             print(f"Loaded {i + 1} documents...")
