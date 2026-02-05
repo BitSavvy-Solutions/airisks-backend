@@ -19,7 +19,7 @@ SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tq
 # Cosmos DB config
 COSMOS_ENDPOINT = "https://airisks.documents.azure.com:443/"
 DATABASE_NAME = "airisks"
-CONTAINER_NAME = "risks"
+CONTAINER_NAME = "mit_risks"
 
 def fetch_sheet_data(url, skip_rows=1):
     """
@@ -64,7 +64,7 @@ def fetch_sheet_data(url, skip_rows=1):
         if row:  # Skip empty rows
             row_dict = dict(zip(headings, row))
             assert len(row) == len(headings), f"Row {i} has {len(row)} columns but expected {len(headings)}... {row_dict}"
-            data_rows.append(row_dict | {"id": f"mit.{row_dict['evId']}", "source": "MIT_Risk_Repository"})
+            data_rows.append({"id": f"mit.{row_dict['evId']}"} | row_dict | {"source": "MIT_Risk_Repository"})
     
     return data_rows
 
@@ -73,8 +73,6 @@ def main():
     print("Fetching MIT data from Google Sheets...")
     rows = fetch_sheet_data(SHEET_URL)
     print(f"Got {len(rows)} rows")
-
-    rows = rows[:4]
 
     # Connect to Cosmos
 
