@@ -6,10 +6,12 @@
 
 import csv
 import io
+import time
 import requests
 from urllib.parse import quote
 from azure.identity import DefaultAzureCredential
 from azure.cosmos import CosmosClient, PartitionKey
+from azure.core.exceptions import ServiceResponseTimeoutError
 
 # Google Sheet config
 SPREADSHEET_ID = "15LeHcpeuZC9txkvcaMoh3sUhkMvdMMry69xxXL46DT0"  # direct link to the MIT spreadsheet
@@ -68,6 +70,31 @@ def fetch_sheet_data(url, skip_rows=1):
     
     return data_rows
 
+def upsert_with_retry(container, item, max_retries=5, initial_delay=1):
+    """
+    Upsert an item with exponential backoff retry for timeout errors.
+    
+    Args:
+        container: The Cosmos DB container
+        item: The item to upsert
+        max_retries: Maximum number of retry attempts (default: 5)
+        initial_delay: Initial delay in seconds before first retry (default: 1)
+    """
+    for attempt in range(max_retries):
+        try:
+            container.upsert_item(item)
+            return
+        except ServiceResponseTimeoutError as e:
+            if attempt == max_retries - 1:
+                # Last attempt, re-raise the exception
+                print(f"Failed to upsert item {item.get('id', 'unknown')} after {max_retries} attempts")
+                raise
+            
+            # Calculate exponential backoff delay
+            delay = initial_delay * (2 ** attempt)
+            print(f"Timeout on attempt {attempt + 1}/{max_retries} for item {item.get('id', 'unknown')}, retrying in {delay}s...")
+            time.sleep(delay)
+
 def main():
     # Fetch the sheet
     print("Fetching MIT data from Google Sheets...")
@@ -87,7 +114,7 @@ def main():
 
     # Load each row as a document
     for i, row in enumerate(rows):
-        container.upsert_item(row)
+        upsert_with_retry(container, row)
         
         if (i + 1) % 100 == 0:
             print(f"Loaded {i + 1} documents...")
